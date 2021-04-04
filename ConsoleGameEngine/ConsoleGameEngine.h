@@ -28,6 +28,7 @@
 #include <sstream>
 #include <condition_variable>
 #include <chrono>
+#include <vector>
 
 #define ESC L"\x1b"
 #define CSI L"\x1b["
@@ -35,6 +36,63 @@
 #define wchar wchar_t
 
 using namespace std::chrono_literals;
+
+class CGEKey {
+    friend class CGEKeyRegistry;
+private:
+    SHORT last_state = 0;
+    int virtual_key;
+    bool got_pressed = false;
+    bool is_down = false;
+
+    CGEKey(int vitual_key) :
+        virtual_key(vitual_key) {}
+public:
+    bool isDown() {
+        return is_down;
+    }
+    /*returns true once pressed, does not reset*/
+    bool gotPressed() {
+        if (got_pressed)
+        {
+            got_pressed = false;
+            return true;
+        }
+        return false;
+    }
+};
+
+class CGEKeyRegistry {
+    friend class ConsoleGameEngine;
+private:
+    std::vector<CGEKey*> key_register;
+
+    CGEKeyRegistry(){}
+    ~CGEKeyRegistry(){}
+
+    void update() {
+        for (CGEKey* key : key_register) {
+            SHORT state = GetKeyState(key->virtual_key);
+            if (state < 0) {
+                key->is_down = true;
+                if (key->last_state >= 0) {
+                    key->got_pressed = true;
+                }
+            } 
+            else {
+                key->is_down = false;
+            }
+            key->last_state = state;
+        }
+    }
+    
+public:
+    CGEKey* registerKey(int virtual_key) {
+        CGEKey* key = new CGEKey(virtual_key);
+        key_register.push_back(key);
+        return key;
+    }
+};
 
 class CGEMap {
     friend class ConsoleGameEngine;
@@ -68,12 +126,14 @@ public:
 };
 
 class ConsoleGameEngine {
+public:
+    CGEKeyRegistry key_registry;
 private:
     std::wstring current_old = L"";
 
     std::wostringstream out;
     std::wostringstream render_out;
-    CGEMap* map;
+    CGEMap* map = nullptr;
     bool map_enabled = false;
 
     void (*game_loop) (double);
@@ -308,6 +368,7 @@ private:
             std::unique_lock<std::mutex> lock(buffer_flag ? mutex_mech_1 : mutex_mech_2);
             while (!(buffer_flag ? continue_mech_1 : continue_mech_2)) (buffer_flag ? cv_mech_1 : cv_mech_2).wait(lock);
 
+            key_registry.update();
             auto end = std::chrono::steady_clock::now();
             std::chrono::duration<double> elapsed_time = end - start;
             game_loop(elapsed_time.count());
