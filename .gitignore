@@ -365,3 +365,5 @@ FodyWeavers.xsd
 # Custom
 ConsoleGameEngine/Source.cpp
 ConsoleGameEngine/Source.h
+/ConsoleGameEngine/Main.cpp
+/ConsoleGameEngine/Main.h

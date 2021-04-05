@@ -100,21 +100,18 @@ private:
     ConsoleGameEngine* cge;
     int width;
     int height;
-    wchar* map;
+    std::wstring map;
     CGEMap(int width, int height, ConsoleGameEngine* cge) :
         cge(cge),
         width(width),
         height(height)
     {
-        map = new wchar[(width + 1) * height]{ L' ' };
+        map.resize(height * (width + 1), L' '); //TODO
         for (int i = 0; i < height; i++) {
-            map[width + width * i] = L'\n';
+            map[width + (width + 1) * i] = L'\n';
         }
     }
-
-    ~CGEMap() {
-        delete[] map;
-    }
+    ~CGEMap() {}
 public:
     wchar getChar(int x, int y) {
         return map[(width + 1) * y + x];
@@ -427,4 +424,3 @@ private:
         }
     }
 };
-
