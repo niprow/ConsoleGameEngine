@@ -155,6 +155,11 @@ public:
         showCurser();
     }
 
+    /*stops the program, call in game_loop*/
+    void stop() {
+        run = false;
+    }
+
     ~ConsoleGameEngine() {
         delete map;
     }
@@ -212,11 +217,11 @@ public:
     }
 
     void setCurser(int x, int y) {
-        std::wcout << CSI << y << ";" << x << "H";
+        std::wcout << CSI << y << L";" << x << L"H";
     }
 
     void deleteChar(int n) {
-        std::wcout << CSI << n << "P";
+        std::wcout << CSI << n << L"P";
     }
 
     CGEMap* enableMap(int width, int height) {
