@@ -13,7 +13,7 @@ Looking forward to get it working on Linux.
 # Getting Started
 
 There is at the moment not more than the documentary in the code.
-There is a [smaple](ConsoleGameEngine/Sample.cpp) to get started with the basics.
+There is a [sample](ConsoleGameEngine/Sample.cpp) to get started with the basics.
 
 # Ideas and Help
 
