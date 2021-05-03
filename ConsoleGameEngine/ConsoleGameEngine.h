@@ -17,9 +17,27 @@
 
 #pragma once
 
-#ifndef UNICODE
-#error "unicode is needed"
+/*------------------------------- DEBUG -------------------------------*/
+//#define DEBUG
+
+#ifdef DEBUG
+#include <fstream>
+
+bool Debug_Out = false;
+
+void DebugOut(const std::wstring out) {
+    std::wofstream file_out;
+    file_out.open(L"./debug.txt");
+    file_out << out;
+    file_out.close();
+}
+
+void DebugOut(bool b) {
+    Debug_Out = b;
+}
 #endif
+/*------------------------------- DEBUG END -------------------------------*/
+
 
 #include <iostream>
 #include <Windows.h>
@@ -30,10 +48,31 @@
 #include <chrono>
 #include <vector>
 
-#define ESC L"\x1b"
+#define ESC L'\x1b'
 #define CSI L"\x1b["
-
 #define wchar wchar_t
+
+/*text formats*/
+#define TF_COLOR_FOREGROUND_BLACK      30
+#define TF_COLOR_FOREGROUND_RED        31
+#define TF_COLOR_FOREGROUND_GREEN      32
+#define TF_COLOR_FOREGROUND_YELLOW     33
+#define TF_COLOR_FOREGROUND_BLUE       34
+#define TF_COLOR_FOREGROUND_MAGENTA    35
+#define TF_COLOR_FOREGROUND_CYAN       36
+#define TF_COLOR_FOREGROUND_WHITE      37
+#define TF_COLOR_FOREGROUND_DEFAULT    39
+
+#define TF_COLOR_BACKGROUND_BLACK      40
+#define TF_COLOR_BACKGROUND_RED        41
+#define TF_COLOR_BACKGROUND_GREEN      42
+#define TF_COLOR_BACKGROUND_YELLOW     43
+#define TF_COLOR_BACKGROUND_BLUE       44
+#define TF_COLOR_BACKGROUND_MAGENTA    45
+#define TF_COLOR_BACKGROUND_CYAN       46
+#define TF_COLOR_BACKGROUND_WHITE      47
+#define TF_COLOR_BACKGROUND_DEFAULT    49
+
 
 using namespace std::chrono_literals;
 
@@ -97,28 +136,109 @@ public:
 class CGEMap {
     friend class ConsoleGameEngine;
 private:
-    ConsoleGameEngine* cge;
+    struct CGEMapChar {
+        bool changed = true;
+
+        int foreground_color = TF_COLOR_FOREGROUND_DEFAULT;
+        int backgroud_color = TF_COLOR_BACKGROUND_DEFAULT;
+        wchar c = ' ';
+    };
+
+    struct CGEMapBuffer {
+        CGEMapChar* buffer;
+        int width;
+
+        CGEMapBuffer(int width, int height) :
+        width(width) {
+            buffer = new CGEMapChar[width * width];
+        }
+        ~CGEMapBuffer() {
+            delete[] buffer;
+        }
+
+        CGEMapChar& get(int x, int y) {
+            return buffer[y * width + x];
+        }
+    };
+
     int width;
     int height;
-    std::wstring map;
-    CGEMap(int width, int height, ConsoleGameEngine* cge) :
-        cge(cge),
-        width(width),
-        height(height)
-    {
-        map.resize(height * (width + 1), L' '); //TODO
-        for (int i = 0; i < height; i++) {
-            map[width + (width + 1) * i] = L'\n';
-        }
-    }
-    ~CGEMap() {}
-public:
-    wchar getChar(int x, int y) {
-        return map[(width + 1) * y + x];
+
+    bool flag_buffer = true;
+    CGEMapBuffer field;
+    CGEMapBuffer field_buffer_1;
+    CGEMapBuffer field_buffer_2;
+
+    CGEMapBuffer& getActiveBuffer() {
+        return (flag_buffer ? field_buffer_1 : field_buffer_2);
     }
 
+    CGEMapBuffer& getPassiveBuffer() {
+        return (!flag_buffer ? field_buffer_1 : field_buffer_2);
+    }
+    
+    CGEMap(int width, int height) :
+        width(width),
+        height(height), 
+        field(width, height), 
+        field_buffer_1(width, height), 
+        field_buffer_2(width, height) { }
+    ~CGEMap() { }
+
+    void switchFlag() {
+        flag_buffer = !flag_buffer;
+    }
+public:
     void setChar(int x, int y, wchar c) {
-        map[(width + 1) * y + x] = c;
+        field.get(x, y).c = c;
+        getActiveBuffer().get(x, y).c = c;
+        getActiveBuffer().get(x, y).changed = true;
+
+    }
+
+    void setForegroudColor(int x, int y, int foregroud_color) {
+        field.get(x, y).foreground_color = foregroud_color;
+        getActiveBuffer().get(x, y).foreground_color = foregroud_color;
+        getActiveBuffer().get(x, y).changed = true;
+    }
+
+    void setBackgroudColor(int x, int y, int backgroud_color) {
+        field.get(x, y).backgroud_color = backgroud_color;
+        getActiveBuffer().get(x, y).backgroud_color = backgroud_color;
+        getActiveBuffer().get(x, y).changed = true;
+    }
+
+private:
+    std::wstring getOutput() {
+        std::wostringstream stream;
+        int last_color_bg = -1;
+        int last_color_fg = -1;
+        int current_x = -1;
+        int current_y = -1;
+
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                if (getPassiveBuffer().get(x, y).changed) {
+                    if (!(current_x == x && current_y == y)) {
+                        stream << CSI << (y + 1)  << L';' << (x + 1) << 'H';
+                    }
+                    if (getPassiveBuffer().get(x, y).backgroud_color != last_color_bg) {
+                        stream << CSI << getPassiveBuffer().get(x, y).backgroud_color << L'm';
+                        last_color_bg = getPassiveBuffer().get(x, y).backgroud_color;
+                    }
+                    if (getPassiveBuffer().get(x, y).foreground_color != last_color_fg) {
+                        stream << CSI << getPassiveBuffer().get(x, y).foreground_color << L'm';
+                        last_color_fg = getPassiveBuffer().get(x, y).foreground_color;
+                    }
+                    stream << getPassiveBuffer().get(x, y).c;
+
+                    getPassiveBuffer().get(x, y).changed = false;
+                    current_y = y;
+                    current_x = x + 1;
+                }
+            }
+        }
+        return stream.str();
     }
 };
 
@@ -126,12 +246,9 @@ class ConsoleGameEngine {
 public:
     CGEKeyRegistry key_registry;
 private:
-    std::wstring current_old = L"";
-
     std::wostringstream out;
     std::wostringstream render_out;
     CGEMap* map = nullptr;
-    bool map_enabled = false;
 
     void (*game_loop) (double);
     bool run = true;
@@ -139,11 +256,9 @@ public:
     ConsoleGameEngine(void (*game_loop)(double)) :
         game_loop(game_loop) { }
 
-    void start() {
-        /*init*/
-        enableTVMode();
-        useAlternativeScreenBuffer();
-        hideCurser();
+    /*starts the program*/
+    int start() {
+        if (map == nullptr) return -3;
 
         std::thread thread_mechanics(&ConsoleGameEngine::thread_mechanics, this);
         std::thread thread_graphics(&ConsoleGameEngine::thread_graphics, this);
@@ -153,6 +268,8 @@ public:
 
         useMainScreenBuffer();
         showCurser();
+
+        return 0;
     }
 
     /*stops the program, call in game_loop*/
@@ -180,16 +297,6 @@ public:
             return false;
         }
         return true;
-    }
-
-    /* get the outstream to set output thtat is drawn manually */
-    std::wostringstream* const getOut() {
-        return &out;
-    }
-
-    void resetOut() {
-        out.str(L"");
-        out.clear();
     }
 
     void hideCurser() {
@@ -224,132 +331,33 @@ public:
         std::wcout << CSI << n << L"P";
     }
 
-    CGEMap* enableMap(int width, int height) {
-        map_enabled = true;
-        map = new CGEMap(width, height, this);
+    CGEMap* init(int width, int height) {
+        enableTVMode();
+        useAlternativeScreenBuffer();
+        hideCurser();
+
+        map = new CGEMap(width, height);
+
         return map;
     }
 
-    void disableMap() {
-        map_enabled = false;
+    void changeTextFormat(const wchar* format) {
+        std::wcout << CSI << format << L'm';
+    }
+
+    void oChangeTextFormat(const wchar* format) {
+        std::wcout << CSI << format << L'm';
     }
 
 private:
-    /*
-    * finish drawing in out
-    * calculate "Graphics"
-    */
-    void finish(std::wstring current_new) {
-        if (current_old == L"") {
-            render_out << current_new;
-        }
-        else {
-            int x = 1;
-            int y = 1;
-            int counter_current_new = 0;
-            int counter_current_old = 0;
-            int length_current_new = wcslen(current_new.c_str());
-            int length_current_old = wcslen(current_old.c_str());
-            bool flag_old = true;
-            bool last_drawn = false;
-            for (; counter_current_new < length_current_new && flag_old; counter_current_new++) {
-                if (counter_current_old >= length_current_old) {
-                    flag_old = false;
-                    break;
-                }
-                if (current_new[counter_current_new] == current_old[counter_current_old]) {
-                    last_drawn = false;
-                }
-                else {
-                    if (!last_drawn) rSetCurser(x, y);
-                    if (current_new[counter_current_new] == L'\n') {
-                        int delete_character = 0;
-                        while (true) {
-                            if (counter_current_old >= length_current_old) {
-                                flag_old = false;
-                                break;
-                            }
-                            delete_character++;
-                            if (current_old[counter_current_old] == L'\n') break;
-                            counter_current_old++;
-                        }
-                        rDeleteChar(delete_character);
-                    }
-                    else if (current_old[counter_current_old] == L'\n') {
-                        while (true) {
-                            if (counter_current_new == length_current_new || current_new[counter_current_new] == L'\n') break;
-                            render_out << current_new[counter_current_new];
-                            counter_current_new++;
-                        }
-                    }
-                    render_out << current_new[counter_current_new];
-                    last_drawn = true;
-                }
-                if (current_new[counter_current_new] == L'\n') {
-                    y++;
-                    x = 0;
-                }
-                counter_current_old++;
-                x++;
-            }
-            if (!flag_old && counter_current_new < length_current_new) {
-                if (!last_drawn) rSetCurser(x, y);
-                render_out << &current_new[counter_current_new];
-            }
-            else if (counter_current_old < length_current_old) {
-                if (!last_drawn) rSetCurser(x, y);
-                int delete_character = 0;
-                for (; counter_current_old < length_current_old; counter_current_old++) {
-                    if (current_old[counter_current_old] == L'\n') break;
-                    delete_character++;
-                }
-                rDeleteChar(delete_character);
-                int delete_line = 0;
-                for (; counter_current_old < length_current_old; counter_current_old++) {
-                    if (current_old[counter_current_old == L'\n']) delete_line++;
-                }
-                rCursorDown(1);
-                rDeleteLine(delete_line);
-            }
-        }
-        current_old = current_new;
-    }
-
-    void render() {
-        std::wstring output = render_out.str();
-        if (output != L"") {
-            std::wcout << output;
-        }
-    }
-
-    void resetRenderOut() {
-        render_out.str(L"");
-        render_out.clear();
-    }
-
-    void rSetCurser(int x, int y) {
-        render_out << CSI << y << L";" << x << L"H";
-    }
-
-    void rDeleteChar(int n) {
-        render_out << CSI << n << L"P";
-    }
-
-    void rCursorDown(int n) {
-        render_out << CSI << n << L"B";
-    }
-
-    void rDeleteLine(int n) {
-        render_out << CSI << n << L"M";
+    void render(std::wstring output) {
+        if (output != L"") std::wcout << output;
     }
 
     std::condition_variable cv_mech_1;
     std::condition_variable cv_mech_2;
     std::condition_variable cv_graphics_1;
     std::condition_variable cv_graphics_2;
-
-    std::wstring buffer_out_1;
-    std::wstring buffer_out_2;
 
     std::mutex mutex_mech_1;
     std::mutex mutex_mech_2;
@@ -376,10 +384,11 @@ private:
             game_loop(elapsed_time.count());
             start = std::chrono::steady_clock::now();
             
-            if (map_enabled) out << map->map;
+            
 
             if (buffer_flag) {
-                buffer_out_1 = out.str();
+                map->switchFlag();
+
                 mutex_graphics_1.lock();
                 continue_graphics_1 = true;
                 mutex_graphics_1.unlock();
@@ -387,14 +396,14 @@ private:
                 continue_mech_1 = false;
             }
             else {
-                buffer_out_2 = out.str();
+                map->switchFlag();
+
                 mutex_graphics_2.lock();
                 continue_graphics_2 = true;
                 mutex_graphics_2.unlock();
                 cv_graphics_2.notify_all();
                 continue_mech_2 = false;
             }
-            resetOut();
             buffer_flag = !buffer_flag;
         }
     }
@@ -404,8 +413,9 @@ private:
             std::unique_lock<std::mutex> lock(buffer_flag_graphics ? mutex_graphics_1 : mutex_graphics_2);
             while (!(buffer_flag_graphics ? continue_graphics_1 : continue_graphics_2)) (buffer_flag_graphics ? cv_graphics_1 : cv_graphics_2).wait(lock);
 
+            std::wstring output;
             if (buffer_flag_graphics) {
-                finish(buffer_out_1);
+                output = map->getOutput();
 
                 mutex_mech_1.lock();
                 continue_mech_1 = true;
@@ -414,7 +424,7 @@ private:
                 continue_graphics_1 = false;
             }
             else {
-                finish(buffer_out_2);
+                output = map->getOutput();
 
                 mutex_mech_2.lock();
                 continue_mech_2 = true;
@@ -423,8 +433,7 @@ private:
                 continue_graphics_2 = false;
             }
 
-            render();
-            resetRenderOut();
+            render(output);
             buffer_flag_graphics = !buffer_flag_graphics;
         }
     }
