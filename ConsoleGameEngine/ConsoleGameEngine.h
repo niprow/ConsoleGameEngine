@@ -223,7 +223,7 @@ public:
 
 class GraphicsBakery {
 public:
-    virtual std::wstring getOutput() = 0;
+    virtual cgestring getOutput() = 0;
     virtual void switchBuffer() = 0;
 };
 
@@ -298,7 +298,7 @@ private:
     CGECharMap(int width, int height) : CGEMap<CGEChar>(width, height) { }
     ~CGECharMap() { }
 
-    std::wstring getOutput() override {
+    cgestring getOutput() override {
         cgetostringstream stream;
         int last_color_bg = -1;
         int last_color_fg = -1;
@@ -485,7 +485,7 @@ private:
 
     ~CGEPixelMap() { }
 
-    std::wstring getOutput() override {
+    cgestring getOutput() override {
         cgetostringstream stream;
         CGEPixel last_drawn_pixel;
         int current_x = -1;
@@ -590,6 +590,7 @@ public:
 #endif
 
     void setFontSize(int width, int height) {
+#ifdef WIN32
         HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
 
         PCONSOLE_FONT_INFOEX lpConsoleCurrentFontEx = new CONSOLE_FONT_INFOEX();
@@ -598,6 +599,9 @@ public:
         lpConsoleCurrentFontEx->dwFontSize.X = width;
         lpConsoleCurrentFontEx->dwFontSize.Y = height;
         SetCurrentConsoleFontEx(out, 0, lpConsoleCurrentFontEx);
+#elif __linux__
+        //TODO
+#endif
     }
 
     void hideCurser() {
@@ -671,8 +675,8 @@ private:
         hideCurser();
     }
 
-    void render(std::wstring output) {
-        if (output != EMPTY_STRING) std::wcout << output;
+    void render(cgestring output) {
+        if (output != EMPTY_STRING) cgecout << output;
     }
 
     std::condition_variable cv_mech_1;
