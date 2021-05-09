@@ -81,6 +81,11 @@ typedef wchar_t cgechar;
 #include <condition_variable>
 #include <chrono>
 #include <vector>
+#include <map>
+
+#define ESC L'\x1b'
+#define CSI L"\x1b["
+#define wchar wchar_t
 
 /*text formats*/
 #define TF_COLOR_FOREGROUND_BLACK      30
@@ -189,84 +194,100 @@ public:
     }
 };
 
-class CGEMap {
-    friend class ConsoleGameEngine;
-private:
-    struct CGEMapChar {
-        bool changed = true;
+class twostringstream : public std::wstringstream {
+public:
+    /*starts with 0;0*/
+    void setCursor(int x, int y) {
+        *this << CSI << y + 1 << L';' << x + 1 << L'H';
+    }
 
         int foreground_color = TF_COLOR_FOREGROUND_DEFAULT;
         int backgroud_color = TF_COLOR_BACKGROUND_DEFAULT;
-        cgechar c = _FBLOCK;
+        wchar c = ' ';
     };
 
-    struct CGEMapBuffer {
-        CGEMapChar* buffer;
-        int width;
+class GraphicsBakery {
+public:
+    virtual std::wstring getOutput() = 0;
+    virtual void switchBuffer() = 0;
+};
 
-        CGEMapBuffer(int width, int height) :
+template <class U>
+class CGEBuffer {
+    U* buffer = nullptr;
+    int width;
+
+public:
+    CGEBuffer(int width, int height) :
         width(width) {
-            buffer = new CGEMapChar[width * width];
-        }
-        ~CGEMapBuffer() {
-            delete[] buffer;
-        }
+        buffer = new U[width * height];
+    }
+    ~CGEBuffer() {
+        delete[] buffer;
+    }
 
-        CGEMapChar& get(int x, int y) {
-            return buffer[y * width + x];
-        }
-    };
+    U& get(int x, int y) {
+        return buffer[y * width + x];
+    }
+};
 
+template <class U>
+class CGEMap : public GraphicsBakery {
+    friend class ConsoleGameEngine;
+protected:
     int width;
     int height;
 
     bool flag_buffer = true;
-    CGEMapBuffer field;
-    CGEMapBuffer field_buffer_1;
-    CGEMapBuffer field_buffer_2;
+    CGEBuffer<U> buffer_0;
+    CGEBuffer<U> buffer_1;
+    CGEBuffer<U> buffer_2;
 
-    CGEMapBuffer& getActiveBuffer() {
-        return (flag_buffer ? field_buffer_1 : field_buffer_2);
-    }
-
-    CGEMapBuffer& getPassiveBuffer() {
-        return (!flag_buffer ? field_buffer_1 : field_buffer_2);
-    }
-    
     CGEMap(int width, int height) :
-        width(width),
-        height(height), 
-        field(width, height), 
-        field_buffer_1(width, height), 
-        field_buffer_2(width, height) { }
+    width(width), 
+    height(height), 
+    buffer_0(width, height), 
+    buffer_1(width, height), 
+    buffer_2(width, height)  { }
+
     ~CGEMap() { }
 
-    void switchFlag() {
+    void switchBuffer() override {
         flag_buffer = !flag_buffer;
     }
 public:
-    void setChar(int x, int y, cgechar c) {
+    void setChar(int x, int y, wchar c) {
         field.get(x, y).c = c;
         getActiveBuffer().get(x, y).c = c;
         getActiveBuffer().get(x, y).changed = true;
 
+    CGEBuffer<U>& getMainBuffer() {
+        return buffer_0;
     }
 
-    void setForegroudColor(int x, int y, int foregroud_color) {
-        field.get(x, y).foreground_color = foregroud_color;
-        getActiveBuffer().get(x, y).foreground_color = foregroud_color;
-        getActiveBuffer().get(x, y).changed = true;
+    CGEBuffer<U>& getActiveBuffer() {
+        return (flag_buffer ? buffer_1 : buffer_2);
     }
 
-    void setBackgroudColor(int x, int y, int backgroud_color) {
-        field.get(x, y).backgroud_color = backgroud_color;
-        getActiveBuffer().get(x, y).backgroud_color = backgroud_color;
-        getActiveBuffer().get(x, y).changed = true;
-    }
+    CGEBuffer<U>& getPassiveBuffer() {
+        return (!flag_buffer ? buffer_1 : buffer_2);
+    };
+};
 
+class CGEChar {
+public:
+    bool changed = true;
+
+    int foreground_color = TF_COLOR_FOREGROUND_DEFAULT;
+    int backgroud_color = TF_COLOR_BACKGROUND_DEFAULT;
+    wchar c = ' ';
+};
+
+class CGECharMap : public CGEMap<CGEChar> {
+    friend class ConsoleGameEngine;
 private:
-    cgestring getOutput() {
-        cgeostringstream stream;
+    std::wstring getOutput() {
+        std::wostringstream stream;
         int last_color_bg = -1;
         int last_color_fg = -1;
         int current_x = -1;
@@ -276,14 +297,14 @@ private:
             for (int x = 0; x < width; x++) {
                 if (getPassiveBuffer().get(x, y).changed) {
                     if (!(current_x == x && current_y == y)) {
-                        stream << CSI << (y + 1)  << VTS_SEPERATOR << (x + 1) << VTS_SET_CURSOR_END;
+                        stream << CSI << (y + 1)  << L';' << (x + 1) << 'H';
                     }
                     if (getPassiveBuffer().get(x, y).backgroud_color != last_color_bg) {
-                        stream << CSI << getPassiveBuffer().get(x, y).backgroud_color << VTS_CHANGE_TEXT_FORMAT_END;
+                        stream << CSI << getPassiveBuffer().get(x, y).backgroud_color << L'm';
                         last_color_bg = getPassiveBuffer().get(x, y).backgroud_color;
                     }
                     if (getPassiveBuffer().get(x, y).foreground_color != last_color_fg) {
-                        stream << CSI << getPassiveBuffer().get(x, y).foreground_color << VTS_CHANGE_TEXT_FORMAT_END;
+                        stream << CSI << getPassiveBuffer().get(x, y).foreground_color << L'm';
                         last_color_fg = getPassiveBuffer().get(x, y).foreground_color;
                     }
                     stream << getPassiveBuffer().get(x, y).c;
@@ -296,14 +317,213 @@ private:
         }
         return stream.str();
     }
+public:
+    void setChar(int x, int y, wchar c) {
+        getMainBuffer().get(x, y).c = c;
+        getActiveBuffer().get(x, y).c = c;
+        getActiveBuffer().get(x, y).changed = true;
+
+    }
+
+    void setForegroundColor(int x, int y, int foregroud_color) {
+        getMainBuffer().get(x, y).foreground_color = foregroud_color;
+        getActiveBuffer().get(x, y).foreground_color = foregroud_color;
+        getActiveBuffer().get(x, y).changed = true;
+    }
+
+    void setBackgroundColor(int x, int y, int backgroud_color) {
+        getMainBuffer().get(x, y).backgroud_color = backgroud_color;
+        getActiveBuffer().get(x, y).backgroud_color = backgroud_color;
+        getActiveBuffer().get(x, y).changed = true;
+    } 
+
+    int getChar(int x, int y) {
+        return getMainBuffer().get(x, y).c;
+    }
+
+    int getForegroundColor(int x, int y) {
+        return getMainBuffer().get(x, y).foreground_color;
+    }
+
+    int getBackgroundColor(int x, int y) {
+        return getMainBuffer().get(x, y).backgroud_color;
+    }
+};
+
+class CGETexture {
+private:
+    CGEBuffer<CGEPixel> buffer;
+    bool changed = true;
+    bool visible = true;
+    int priority = 0;
+    int width;
+    int height;
+    int x = 0;
+    int y = 0;
+public:
+    CGETexture(int width, int height) :
+        width(width),
+        height(height), 
+        buffer(width, height) { }
+
+    void setPosition(int x, int y) {
+       this->x = x;
+       this->y = y;
+       changed = true;
+    }
+
+    void setPixel(int x, int y, unsigned char red, unsigned char green, unsigned char blue) {
+        buffer.get(x, y).setColor(red, green, blue);
+        changed = true;
+    }
+
+    void setVisible(bool visible) {
+        this->visible = visible;
+        changed = true;
+    }
+
+    void setPriority(int priority) {
+        this->priority = priority;
+    }
+
+    int getPriority() {
+        return priority;
+    }
+
+    int getX() {
+        return x;
+    }
+
+    int getY() {
+        return y;
+    }
+};
+
+class CGEPixel {
+public:
+    CGEPixel() { }
+    CGEPixel(unsigned char red, unsigned char green, unsigned char blue) :
+    red(red), 
+    green(green), 
+    blue(blue) { }
+    ~CGEPixel() { }
+private:
+    bool changed = true;
+    bool transparent = false;
+    unsigned char red = 0;
+    unsigned char  green = 0;
+    unsigned char  blue = 0;
+public:
+    bool gotChanged() {
+        return changed;
+    }
+
+    void setChanged(bool changed) {
+        this->changed = changed;
+    }
+
+    bool isTransparent() {
+        return transparent;
+    }
+
+    void setTransparent(bool transparent) {
+        this->transparent = transparent;
+    }
+
+    void setColor(unsigned char red, unsigned char green, unsigned char blue) {
+        this->red = red;
+        this->green = green;
+        this->blue = blue;
+        changed = true;
+    }
+
+    unsigned char getRed() {
+        return red;
+    }
+
+    unsigned char getGreen() {
+        return green;
+    }
+
+    unsigned char getBlue() {
+        return blue;
+    }
+ 
+    bool operator==(CGEPixel& other_pixel) {
+        return red == other_pixel.red && green == other_pixel.green && blue == other_pixel.blue;
+    }
+
+    bool operator!=(CGEPixel& other_pixel) {
+        return !(*this == other_pixel);
+    }
+};
+
+class CGEPixelMap : public CGEMap<CGEPixel> {
+    friend class ConsoleGameEngine;
+private:
+    int pixel_width;
+    int pixel_height;
+    std::vector<CGETexture> textures;
+    std::map<int, CGEBuffer<CGEPixel>> priority_buffers;
+
+    CGEPixelMap(int width, int height, int pixel_width, int pixel_height) : 
+    CGEMap(width, height), 
+    pixel_width(pixel_width), 
+    pixel_height(pixel_height) {  }
+
+    ~CGEPixelMap() { }
+
+    std::wstring getOutput() override {
+        twostringstream stream;
+        CGEPixel last_drawn_pixel;
+        int current_x = -1;
+        int current_y = -1;
+
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                if (getPassiveBuffer().get(x, y).gotChanged()) {
+                    if (!(current_x == x && current_y == y)) {
+                        stream.setCursor(x * pixel_width, y * pixel_height);
+                        current_y = y;
+                        current_x = x;
+                    }
+                    if (last_drawn_pixel != getPassiveBuffer().get(x, y)) {
+                        stream.setBackgroundColor(getPassiveBuffer().get(x, y).getRed(), getPassiveBuffer().get(x, y).getGreen(), getPassiveBuffer().get(x, y).getBlue());
+                    }
+                    for (int j = 0; j < pixel_width; j++) {
+                        stream << FBLOCK;
+                        current_x++;
+                    }
+                    for (int i = 1; i < pixel_height; i++) {
+                        stream.setCursor(x * pixel_width, y * pixel_height + i);
+                        for (int j = 0; j < pixel_width; j++) {
+                            stream << FBLOCK;
+                        }
+                        current_y++;
+                    }
+                    getPassiveBuffer().get(x, y).setChanged(false);
+                }
+            }
+        }
+        return stream.str();
+    }
+public:
+    void setPixel(int x, int y, unsigned char red, unsigned char green, unsigned char blue) {
+        getMainBuffer().get(x, y).setColor(red, green, blue);
+        getActiveBuffer().get(x, y).setColor(red, green, blue);
+    }
+
+    void handleTexture(CGETexture texture) {
+
+    }
 };
 
 class ConsoleGameEngine {
 public:
     CGEKeyRegistry key_registry;
 private:
-    cgeostringstream out;
-    cgeostringstream render_out;
+    std::wostringstream out;
+    std::wostringstream render_out;
     CGEMap* map = nullptr;
 
     void (*game_loop) (double);
@@ -357,6 +577,17 @@ public:
     }
 #endif
 
+    void setFontSize(int width, int height) {
+        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+
+        PCONSOLE_FONT_INFOEX lpConsoleCurrentFontEx = new CONSOLE_FONT_INFOEX();
+        lpConsoleCurrentFontEx->cbSize = sizeof(CONSOLE_FONT_INFOEX);
+        GetCurrentConsoleFontEx(out, 0, lpConsoleCurrentFontEx);
+        lpConsoleCurrentFontEx->dwFontSize.X = width;
+        lpConsoleCurrentFontEx->dwFontSize.Y = height;
+        SetCurrentConsoleFontEx(out, 0, lpConsoleCurrentFontEx);
+    }
+
     void hideCurser() {
         std::wcout << VTS_HIDE_CURSER;
     }
@@ -394,20 +625,23 @@ public:
     }
 
     CGEMap* init(int width, int height) {
-        #ifdef WINDOWS
         enableTVMode();
         #endif
         useAlternativeScreenBuffer();
         hideCurser();
 
-        map = new CGEMap(width, height);
+        if (map != nullptr) {
+            delete map;
+        }
 
-        return map;
+        map = new CGEPixelMap(width, height, pixel_width, pixel_height);
+
+        return (CGEPixelMap*)map;
     }
 
 private:
-    void render(cgestring output) {
-        if (output != EMPTY_STRING) cgecout << output;
+    void render(std::wstring output) {
+        if (output != L"") std::wcout << output;
     }
 
     std::condition_variable cv_mech_1;
@@ -443,7 +677,7 @@ private:
             
 
             if (buffer_flag) {
-                map->switchFlag();
+                map->switchBuffer();
 
                 mutex_graphics_1.lock();
                 continue_graphics_1 = true;
@@ -452,7 +686,7 @@ private:
                 continue_mech_1 = false;
             }
             else {
-                map->switchFlag();
+                map->switchBuffer();
 
                 mutex_graphics_2.lock();
                 continue_graphics_2 = true;
