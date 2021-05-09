@@ -37,13 +37,32 @@ void DebugOut(bool b) {
 }
 #endif
 /*------------------------------- DEBUG END -------------------------------*/
-#ifdef WINDOWS
+#ifdef WIN32
 #include <Windows.h>
 
-typedef wchar_t cgechar;
+#define _CGEKey CGEKeyWindows
+#define cgechar wchar_t
+#define cgestring std::wstring
+#define cgeostringstream std::wostringstream
+#define cgecout std::wcout
+
+#define _FBLOCK L' '
+#define EMPTY_STRING L""
 
 #define ESC L'\x1b'
 #define CSI L"\x1b["
+
+#define VTS_SEPERATOR L';'
+#define VTS_HIDE_CURSER CSI L"?25l"
+#define VTS_SHOW_CURSER CSI L"?25h"
+#define VTS_ENABLE_CURSER_BLINKING CSI L"?12h"
+#define VTS_DISABLE_CURSER_BLINKING CSI L"?12l"
+#define VTS_USE_ALTERNATE_SCREEN_BUFFER CSI L"?1049l"
+#define VTS_USE_MAIN_SCREEN_BUFFER CSI L"?1049l"
+#define VTS_SET_CURSOR_END L'H'
+#define VTS_DELETE_CHAR_END L'P'
+#define VTS_CHANGE_TEXT_FORMAT_END L'm'
+#define VTS_CHANGE_BACKGROUND_COLOR CSI L"48;2;"
 #endif
 
 #ifdef __linux__
@@ -69,10 +88,8 @@ typedef wchar_t cgechar;
 #define VTS_SET_CURSOR_END 'H'
 #define VTS_DELETE_CHAR_END 'P'
 #define VTS_CHANGE_TEXT_FORMAT_END 'm'
-
+#define VTS_CHANGE_BACKGROUND_COLOR CSI "48;2;"
 #endif
-
-
 
 #include <iostream>
 #include <thread>
@@ -82,10 +99,6 @@ typedef wchar_t cgechar;
 #include <chrono>
 #include <vector>
 #include <map>
-
-#define ESC L'\x1b'
-#define CSI L"\x1b["
-#define wchar wchar_t
 
 /*text formats*/
 #define TF_COLOR_FOREGROUND_BLACK      30
@@ -108,7 +121,6 @@ typedef wchar_t cgechar;
 #define TF_COLOR_BACKGROUND_WHITE      47
 #define TF_COLOR_BACKGROUND_DEFAULT    49
 
-
 using namespace std::chrono_literals;
 
 class CGEKey {
@@ -119,7 +131,6 @@ protected:
     bool is_down = false;
     bool got_released = false;
 
-    CGEKey() { } 
     CGEKey(int vitual_key) :
     virtual_key(vitual_key) { }
     ~CGEKey() { }
@@ -137,8 +148,9 @@ public:
     }
 };
 
-#ifdef WINDOWS
+#ifdef WIN32
 class CGEKeyWindows : public CGEKey {
+    friend class CGEKeyRegistry;
 private:
     SHORT last_state = 0;
 protected:
@@ -156,7 +168,7 @@ protected:
     }
 
     CGEKeyWindows(int virtual_key) :
-    virtual_key(virtual_key) { } 
+    CGEKey(virtual_key) { } 
 };  
 #endif
 
@@ -194,17 +206,20 @@ public:
     }
 };
 
-class twostringstream : public std::wstringstream {
+class cgetostringstream : public cgeostringstream {
 public:
     /*starts with 0;0*/
     void setCursor(int x, int y) {
-        *this << CSI << y + 1 << L';' << x + 1 << L'H';
+        *this << CSI << y + 1 << VTS_SEPERATOR << x + 1 << VTS_SET_CURSOR_END;
+    }
+    void changeTextFormat(int format) {
+        *this << CSI << format << VTS_CHANGE_TEXT_FORMAT_END;
     }
 
-        int foreground_color = TF_COLOR_FOREGROUND_DEFAULT;
-        int backgroud_color = TF_COLOR_BACKGROUND_DEFAULT;
-        wchar c = ' ';
-    };
+    void setBackgroundColor(int red, int green, int blue) {
+        *this << VTS_CHANGE_BACKGROUND_COLOR << red << VTS_SEPERATOR << green << VTS_SEPERATOR << blue << VTS_CHANGE_TEXT_FORMAT_END;
+    }
+};
 
 class GraphicsBakery {
 public:
@@ -244,22 +259,17 @@ protected:
     CGEBuffer<U> buffer_2;
 
     CGEMap(int width, int height) :
-    width(width), 
-    height(height), 
-    buffer_0(width, height), 
-    buffer_1(width, height), 
-    buffer_2(width, height)  { }
+        width(width),
+        height(height),
+        buffer_0(width, height),
+        buffer_1(width, height),
+        buffer_2(width, height) { }
 
     ~CGEMap() { }
 
     void switchBuffer() override {
         flag_buffer = !flag_buffer;
     }
-public:
-    void setChar(int x, int y, wchar c) {
-        field.get(x, y).c = c;
-        getActiveBuffer().get(x, y).c = c;
-        getActiveBuffer().get(x, y).changed = true;
 
     CGEBuffer<U>& getMainBuffer() {
         return buffer_0;
@@ -277,17 +287,19 @@ public:
 class CGEChar {
 public:
     bool changed = true;
-
     int foreground_color = TF_COLOR_FOREGROUND_DEFAULT;
     int backgroud_color = TF_COLOR_BACKGROUND_DEFAULT;
-    wchar c = ' ';
+    cgechar c = _FBLOCK;
 };
 
 class CGECharMap : public CGEMap<CGEChar> {
     friend class ConsoleGameEngine;
 private:
-    std::wstring getOutput() {
-        std::wostringstream stream;
+    CGECharMap(int width, int height) : CGEMap<CGEChar>(width, height) { }
+    ~CGECharMap() { }
+
+    std::wstring getOutput() override {
+        cgetostringstream stream;
         int last_color_bg = -1;
         int last_color_fg = -1;
         int current_x = -1;
@@ -297,14 +309,14 @@ private:
             for (int x = 0; x < width; x++) {
                 if (getPassiveBuffer().get(x, y).changed) {
                     if (!(current_x == x && current_y == y)) {
-                        stream << CSI << (y + 1)  << L';' << (x + 1) << 'H';
+                        stream.setCursor(x, y);
                     }
                     if (getPassiveBuffer().get(x, y).backgroud_color != last_color_bg) {
-                        stream << CSI << getPassiveBuffer().get(x, y).backgroud_color << L'm';
+                        stream.changeTextFormat(getPassiveBuffer().get(x, y).backgroud_color);
                         last_color_bg = getPassiveBuffer().get(x, y).backgroud_color;
                     }
                     if (getPassiveBuffer().get(x, y).foreground_color != last_color_fg) {
-                        stream << CSI << getPassiveBuffer().get(x, y).foreground_color << L'm';
+                        stream.changeTextFormat(getPassiveBuffer().get(x, y).foreground_color);
                         last_color_fg = getPassiveBuffer().get(x, y).foreground_color;
                     }
                     stream << getPassiveBuffer().get(x, y).c;
@@ -318,7 +330,7 @@ private:
         return stream.str();
     }
 public:
-    void setChar(int x, int y, wchar c) {
+    void setChar(int x, int y, cgechar c) {
         getMainBuffer().get(x, y).c = c;
         getActiveBuffer().get(x, y).c = c;
         getActiveBuffer().get(x, y).changed = true;
@@ -335,7 +347,7 @@ public:
         getMainBuffer().get(x, y).backgroud_color = backgroud_color;
         getActiveBuffer().get(x, y).backgroud_color = backgroud_color;
         getActiveBuffer().get(x, y).changed = true;
-    } 
+    }
 
     int getChar(int x, int y) {
         return getMainBuffer().get(x, y).c;
@@ -347,55 +359,6 @@ public:
 
     int getBackgroundColor(int x, int y) {
         return getMainBuffer().get(x, y).backgroud_color;
-    }
-};
-
-class CGETexture {
-private:
-    CGEBuffer<CGEPixel> buffer;
-    bool changed = true;
-    bool visible = true;
-    int priority = 0;
-    int width;
-    int height;
-    int x = 0;
-    int y = 0;
-public:
-    CGETexture(int width, int height) :
-        width(width),
-        height(height), 
-        buffer(width, height) { }
-
-    void setPosition(int x, int y) {
-       this->x = x;
-       this->y = y;
-       changed = true;
-    }
-
-    void setPixel(int x, int y, unsigned char red, unsigned char green, unsigned char blue) {
-        buffer.get(x, y).setColor(red, green, blue);
-        changed = true;
-    }
-
-    void setVisible(bool visible) {
-        this->visible = visible;
-        changed = true;
-    }
-
-    void setPriority(int priority) {
-        this->priority = priority;
-    }
-
-    int getPriority() {
-        return priority;
-    }
-
-    int getX() {
-        return x;
-    }
-
-    int getY() {
-        return y;
     }
 };
 
@@ -458,6 +421,55 @@ public:
     }
 };
 
+class CGETexture {
+private:
+    CGEBuffer<CGEPixel> buffer;
+    bool changed = true;
+    bool visible = true;
+    int priority = 0;
+    int width;
+    int height;
+    int x = 0;
+    int y = 0;
+public:
+    CGETexture(int width, int height) :
+        width(width),
+        height(height), 
+        buffer(width, height) { }
+
+    void setPosition(int x, int y) {
+       this->x = x;
+       this->y = y;
+       changed = true;
+    }
+
+    void setPixel(int x, int y, unsigned char red, unsigned char green, unsigned char blue) {
+        buffer.get(x, y).setColor(red, green, blue);
+        changed = true;
+    }
+
+    void setVisible(bool visible) {
+        this->visible = visible;
+        changed = true;
+    }
+
+    void setPriority(int priority) {
+        this->priority = priority;
+    }
+
+    int getPriority() {
+        return priority;
+    }
+
+    int getX() {
+        return x;
+    }
+
+    int getY() {
+        return y;
+    }
+};
+
 class CGEPixelMap : public CGEMap<CGEPixel> {
     friend class ConsoleGameEngine;
 private:
@@ -474,7 +486,7 @@ private:
     ~CGEPixelMap() { }
 
     std::wstring getOutput() override {
-        twostringstream stream;
+        cgetostringstream stream;
         CGEPixel last_drawn_pixel;
         int current_x = -1;
         int current_y = -1;
@@ -491,13 +503,13 @@ private:
                         stream.setBackgroundColor(getPassiveBuffer().get(x, y).getRed(), getPassiveBuffer().get(x, y).getGreen(), getPassiveBuffer().get(x, y).getBlue());
                     }
                     for (int j = 0; j < pixel_width; j++) {
-                        stream << FBLOCK;
+                        stream << _FBLOCK;
                         current_x++;
                     }
                     for (int i = 1; i < pixel_height; i++) {
                         stream.setCursor(x * pixel_width, y * pixel_height + i);
                         for (int j = 0; j < pixel_width; j++) {
-                            stream << FBLOCK;
+                            stream << _FBLOCK;
                         }
                         current_y++;
                     }
@@ -524,7 +536,7 @@ public:
 private:
     std::wostringstream out;
     std::wostringstream render_out;
-    CGEMap* map = nullptr;
+    GraphicsBakery* map = nullptr;
 
     void (*game_loop) (double);
     bool run = true;
@@ -557,7 +569,7 @@ public:
         delete map;
     }
 
-#ifdef WINDOWS
+#ifdef WIN32
     bool enableTVMode() {
         HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
         if (hOut == INVALID_HANDLE_VALUE) {
@@ -624,11 +636,22 @@ public:
         std::wcout << CSI << format << VTS_CHANGE_TEXT_FORMAT_END;
     }
 
-    CGEMap* init(int width, int height) {
-        enableTVMode();
-        #endif
-        useAlternativeScreenBuffer();
-        hideCurser();
+
+    CGECharMap* init_CharMap(int width, int height) {
+        preinit();
+
+        if (map != nullptr) {
+            delete map;
+        }
+
+        map = new CGECharMap(width, height);
+
+        return (CGECharMap*)map;
+    }
+
+    /*pixel_width and pixel_height in amount of characters in console*/
+    CGEPixelMap* init_PixelMap(int width, int height, int pixel_width, int pixel_height) {
+        preinit();
 
         if (map != nullptr) {
             delete map;
@@ -640,8 +663,16 @@ public:
     }
 
 private:
+    void preinit() {
+#ifdef WIN32
+        enableTVMode();
+#endif
+        useAlternativeScreenBuffer();
+        hideCurser();
+    }
+
     void render(std::wstring output) {
-        if (output != L"") std::wcout << output;
+        if (output != EMPTY_STRING) std::wcout << output;
     }
 
     std::condition_variable cv_mech_1;
