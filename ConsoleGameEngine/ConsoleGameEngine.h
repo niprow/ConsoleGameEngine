@@ -18,9 +18,9 @@
 #pragma once
 
 /*------------------------------- DEBUG -------------------------------*/
-//#define DEBUG
+//#define DEBUG_WINDOWS
 
-#ifdef DEBUG
+#ifdef DEBUG_WINDOWS
 #include <fstream>
 
 bool Debug_Out = false;
@@ -37,20 +37,50 @@ void DebugOut(bool b) {
 }
 #endif
 /*------------------------------- DEBUG END -------------------------------*/
+#ifdef WINDOWS
+#include <Windows.h>
+
+typedef wchar_t cgechar;
+
+#define ESC L'\x1b'
+#define CSI L"\x1b["
+#endif
+
+#ifdef __linux__
+#define _CGEKey CGEKeyLinux
+#define cgechar char
+#define cgestring std::string
+#define cgeostringstream std::ostringstream
+#define cgecout std::cout
+
+#define _FBLOCK ' '
+#define EMPTY_STRING ""
+
+#define ESC '\x1b'
+#define CSI "\x1b["
+
+#define VTS_SEPERATOR ';'
+#define VTS_HIDE_CURSER CSI "?25l"
+#define VTS_SHOW_CURSER CSI "?25h"
+#define VTS_ENABLE_CURSER_BLINKING CSI "?12h"
+#define VTS_DISABLE_CURSER_BLINKING CSI "?12l"
+#define VTS_USE_ALTERNATE_SCREEN_BUFFER CSI "?1049l"
+#define VTS_USE_MAIN_SCREEN_BUFFER CSI "?1049l"
+#define VTS_SET_CURSOR_END 'H'
+#define VTS_DELETE_CHAR_END 'P'
+#define VTS_CHANGE_TEXT_FORMAT_END 'm'
+
+#endif
+
 
 
 #include <iostream>
-#include <Windows.h>
 #include <thread>
 #include <string>
 #include <sstream>
 #include <condition_variable>
 #include <chrono>
 #include <vector>
-
-#define ESC L'\x1b'
-#define CSI L"\x1b["
-#define wchar wchar_t
 
 /*text formats*/
 #define TF_COLOR_FOREGROUND_BLACK      30
@@ -78,56 +108,82 @@ using namespace std::chrono_literals;
 
 class CGEKey {
     friend class CGEKeyRegistry;
-private:
-    SHORT last_state = 0;
+protected:
     int virtual_key;
     bool got_pressed = false;
     bool is_down = false;
+    bool got_released = false;
 
+    CGEKey() { } 
     CGEKey(int vitual_key) :
-        virtual_key(vitual_key) {}
+    virtual_key(vitual_key) { }
+    ~CGEKey() { }
+
+    virtual void update() = 0;
 public:
     bool isDown() {
         return is_down;
     }
-    /*returns true once pressed, does not reset*/
     bool gotPressed() {
-        if (got_pressed)
-        {
-            got_pressed = false;
-            return true;
-        }
-        return false;
+        return got_pressed;
+    }
+    bool gotReleased() {
+        return got_released;
     }
 };
+
+#ifdef WINDOWS
+class CGEKeyWindows : public CGEKey {
+private:
+    SHORT last_state = 0;
+protected:
+    void update() override {
+        SHORT state = GetKeyState(virtual_key);
+            if (state < 0) {
+                is_down = true;
+                got_pressed = last_state >= 0;
+            } 
+            else {
+                is_down = false;
+                if(got_pressed) got_pressed = false;
+            }
+            last_state = state;
+    }
+
+    CGEKeyWindows(int virtual_key) :
+    virtual_key(virtual_key) { } 
+};  
+#endif
+
+#ifdef __linux__
+class CGEKeyLinux : public CGEKey {
+    friend class CGEKeyRegistry;
+protected:
+    CGEKeyLinux(int virtual_key) :
+    CGEKey(virtual_key) { }
+    void update() override {
+        //TODO
+    }
+};
+#endif
 
 class CGEKeyRegistry {
     friend class ConsoleGameEngine;
 private:
     std::vector<CGEKey*> key_register;
 
-    CGEKeyRegistry(){}
-    ~CGEKeyRegistry(){}
+    CGEKeyRegistry() { }
+    ~CGEKeyRegistry() { }
 
     void update() {
         for (CGEKey* key : key_register) {
-            SHORT state = GetKeyState(key->virtual_key);
-            if (state < 0) {
-                key->is_down = true;
-                if (key->last_state >= 0) {
-                    key->got_pressed = true;
-                }
-            } 
-            else {
-                key->is_down = false;
-            }
-            key->last_state = state;
+            key->update();
         }
     }
     
 public:
     CGEKey* registerKey(int virtual_key) {
-        CGEKey* key = new CGEKey(virtual_key);
+        CGEKey* key = new _CGEKey(virtual_key);
         key_register.push_back(key);
         return key;
     }
@@ -141,7 +197,7 @@ private:
 
         int foreground_color = TF_COLOR_FOREGROUND_DEFAULT;
         int backgroud_color = TF_COLOR_BACKGROUND_DEFAULT;
-        wchar c = ' ';
+        cgechar c = _FBLOCK;
     };
 
     struct CGEMapBuffer {
@@ -189,7 +245,7 @@ private:
         flag_buffer = !flag_buffer;
     }
 public:
-    void setChar(int x, int y, wchar c) {
+    void setChar(int x, int y, cgechar c) {
         field.get(x, y).c = c;
         getActiveBuffer().get(x, y).c = c;
         getActiveBuffer().get(x, y).changed = true;
@@ -209,8 +265,8 @@ public:
     }
 
 private:
-    std::wstring getOutput() {
-        std::wostringstream stream;
+    cgestring getOutput() {
+        cgeostringstream stream;
         int last_color_bg = -1;
         int last_color_fg = -1;
         int current_x = -1;
@@ -220,14 +276,14 @@ private:
             for (int x = 0; x < width; x++) {
                 if (getPassiveBuffer().get(x, y).changed) {
                     if (!(current_x == x && current_y == y)) {
-                        stream << CSI << (y + 1)  << L';' << (x + 1) << 'H';
+                        stream << CSI << (y + 1)  << VTS_SEPERATOR << (x + 1) << VTS_SET_CURSOR_END;
                     }
                     if (getPassiveBuffer().get(x, y).backgroud_color != last_color_bg) {
-                        stream << CSI << getPassiveBuffer().get(x, y).backgroud_color << L'm';
+                        stream << CSI << getPassiveBuffer().get(x, y).backgroud_color << VTS_CHANGE_TEXT_FORMAT_END;
                         last_color_bg = getPassiveBuffer().get(x, y).backgroud_color;
                     }
                     if (getPassiveBuffer().get(x, y).foreground_color != last_color_fg) {
-                        stream << CSI << getPassiveBuffer().get(x, y).foreground_color << L'm';
+                        stream << CSI << getPassiveBuffer().get(x, y).foreground_color << VTS_CHANGE_TEXT_FORMAT_END;
                         last_color_fg = getPassiveBuffer().get(x, y).foreground_color;
                     }
                     stream << getPassiveBuffer().get(x, y).c;
@@ -246,8 +302,8 @@ class ConsoleGameEngine {
 public:
     CGEKeyRegistry key_registry;
 private:
-    std::wostringstream out;
-    std::wostringstream render_out;
+    cgeostringstream out;
+    cgeostringstream render_out;
     CGEMap* map = nullptr;
 
     void (*game_loop) (double);
@@ -281,6 +337,7 @@ public:
         delete map;
     }
 
+#ifdef WINDOWS
     bool enableTVMode() {
         HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
         if (hOut == INVALID_HANDLE_VALUE) {
@@ -298,41 +355,48 @@ public:
         }
         return true;
     }
+#endif
 
     void hideCurser() {
-        std::wcout << CSI L"?25l";
+        std::wcout << VTS_HIDE_CURSER;
     }
 
     void showCurser() {
-        std::wcout << CSI L"?25h";
+        std::wcout << VTS_SHOW_CURSER;
     }
 
     void enableCursorBlinking() {
-        std::wcout << CSI L"?12h";
+        std::wcout << VTS_ENABLE_CURSER_BLINKING;
     }
 
     void disableCursorBlinking() {
-        std::wcout << CSI L"?12l";
+        std::wcout << VTS_DISABLE_CURSER_BLINKING;
     }
 
     void useAlternativeScreenBuffer() {
-        std::wcout << CSI L"?1049l";
+        std::wcout << CSI VTS_USE_ALTERNATE_SCREEN_BUFFER;
     }
 
     void useMainScreenBuffer() {
-        std::wcout << CSI L"?1049l";
+        std::wcout << CSI VTS_USE_MAIN_SCREEN_BUFFER;
     }
 
     void setCurser(int x, int y) {
-        std::wcout << CSI << y << L";" << x << L"H";
+        std::wcout << CSI << y << VTS_SEPERATOR << x << VTS_SET_CURSOR_END;
     }
 
     void deleteChar(int n) {
-        std::wcout << CSI << n << L"P";
+        std::wcout << CSI << n << VTS_DELETE_CHAR_END;
+    }
+
+    void changeTextFormat(const cgechar* format) {
+        std::wcout << CSI << format << VTS_CHANGE_TEXT_FORMAT_END;
     }
 
     CGEMap* init(int width, int height) {
+        #ifdef WINDOWS
         enableTVMode();
+        #endif
         useAlternativeScreenBuffer();
         hideCurser();
 
@@ -341,17 +405,9 @@ public:
         return map;
     }
 
-    void changeTextFormat(const wchar* format) {
-        std::wcout << CSI << format << L'm';
-    }
-
-    void oChangeTextFormat(const wchar* format) {
-        std::wcout << CSI << format << L'm';
-    }
-
 private:
-    void render(std::wstring output) {
-        if (output != L"") std::wcout << output;
+    void render(cgestring output) {
+        if (output != EMPTY_STRING) cgecout << output;
     }
 
     std::condition_variable cv_mech_1;
@@ -413,7 +469,7 @@ private:
             std::unique_lock<std::mutex> lock(buffer_flag_graphics ? mutex_graphics_1 : mutex_graphics_2);
             while (!(buffer_flag_graphics ? continue_graphics_1 : continue_graphics_2)) (buffer_flag_graphics ? cv_graphics_1 : cv_graphics_2).wait(lock);
 
-            std::wstring output;
+            cgestring output;
             if (buffer_flag_graphics) {
                 output = map->getOutput();
 
