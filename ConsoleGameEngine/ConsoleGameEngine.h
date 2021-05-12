@@ -18,33 +18,55 @@
 #pragma once
 
 /*------------------------------- DEBUG -------------------------------*/
-//#define DEBUG_WINDOWS
+//#define DEBUG
 
-#ifdef DEBUG_WINDOWS
+#ifdef DEBUG
 #include <fstream>
 
 bool Debug_Out = false;
 
-void DebugOut(const std::wstring out) {
-    std::wofstream file_out;
-    file_out.open(L"./debug.txt");
+void DebugOut(const std::string out) {
+    std::ofstream file_out;
+    file_out.open("./debug.txt");
     file_out << out;
     file_out.close();
 }
 
-void DebugOut(bool b) {
+void DoDebug(bool b) {
     Debug_Out = b;
 }
 #endif
 /*------------------------------- DEBUG END -------------------------------*/
+
 #ifdef WIN32
+#define WINDOWS
+#endif
+
+#ifdef __WIN32
+#ifndef WINDOWS
+#define WINDOWS
+#endif
+#endif
+
+#ifdef __WIN32__
+#ifndef WINDOWS
+#define WINDOWS
+#endif
+#endif
+
+#ifdef __linux__
+#define LINUX
+#endif
+
+#ifdef WINDOWS
 #include <Windows.h>
 
-#define _CGEKey CGEKeyWindows
+#define _CGEKeyRegistry CGEKeyRegistryWindows
 #define cgechar wchar_t
 #define cgestring std::wstring
 #define cgeostringstream std::wostringstream
 #define cgecout std::wcout
+#define cgecin std::wcin
 
 #define _FBLOCK L' '
 #define EMPTY_STRING L""
@@ -65,12 +87,16 @@ void DebugOut(bool b) {
 #define VTS_CHANGE_BACKGROUND_COLOR CSI L"48;2;"
 #endif
 
-#ifdef __linux__
-#define _CGEKey CGEKeyLinux
+#ifdef LINUX
+/* Dependency: sudo apt install libx11-dev */
+#include <X11/Xlib.h>
+
+#define _CGEKeyRegistry CGEKeyRegistryLinux
 #define cgechar char
 #define cgestring std::string
 #define cgeostringstream std::ostringstream
 #define cgecout std::cout
+#define cgecin std::cin
 
 #define _FBLOCK ' '
 #define EMPTY_STRING ""
@@ -89,6 +115,11 @@ void DebugOut(bool b) {
 #define VTS_DELETE_CHAR_END 'P'
 #define VTS_CHANGE_TEXT_FORMAT_END 'm'
 #define VTS_CHANGE_BACKGROUND_COLOR CSI "48;2;"
+
+/* x11 Display to get input from console window */
+Display* d;
+/* x11 Autorepeat: true if usually enabled */
+bool autoreapeat = false;
 #endif
 
 #include <iostream>
@@ -99,8 +130,9 @@ void DebugOut(bool b) {
 #include <chrono>
 #include <vector>
 #include <map>
+#include <utility>
 
-/*text formats*/
+/* text formats */
 #define TF_COLOR_FOREGROUND_BLACK      30
 #define TF_COLOR_FOREGROUND_RED        31
 #define TF_COLOR_FOREGROUND_GREEN      32
@@ -123,92 +155,164 @@ void DebugOut(bool b) {
 
 using namespace std::chrono_literals;
 
+#ifdef LINUX
+/*
+* get ID from terminal window and enable XEvents for KeyPress, KeyRelease and FocusChange
+* to be able to update CGEKeyRegistry
+*/
+static bool SelectXInput() {
+    //TODO
+    d = XOpenDisplay(NULL);
+    system("env | grep \"WINDOW *ID *=\"");
+    Window w;
+    std::cin >> w;
+    XSelectInput(d, w, KeyPressMask | KeyReleaseMask | FocusChangeMask);
+    return true;
+}
+
+static bool IsAutorepeatEnabled() {
+    //TODO
+    system("xset q | \"auto *repeat: *on\""); 
+    return true; 
+} 
+
+/* Sets x11 autorepeat */
+static void SetAutorepeat(bool ar) {
+    if (ar) {
+        system("xset r on");
+    }
+    else {
+        system("xset r off");
+    }
+}
+#endif
+
 class CGEKey {
     friend class CGEKeyRegistry;
+    friend class CGEKeyRegistryLinux;
+    friend class CGEKeyRegistryWindows;
 protected:
-    int virtual_key;
-    bool got_pressed = false;
     bool is_down = false;
+    bool got_pressed = false;
     bool got_released = false;
 
-    CGEKey(int vitual_key) :
-    virtual_key(vitual_key) { }
+    CGEKey() { }
     ~CGEKey() { }
 
-    virtual void update() = 0;
+    void update(bool value) {
+        if(is_down != value) {
+            if(value) {
+                got_pressed = true;
+                is_down = true;
+            }
+            else {
+                got_released = true;
+                is_down = false;
+            }
+        }
+    }
 public:
     bool isDown() {
         return is_down;
     }
+    /*
+    * Returns if key got pressed since last call. 
+    * If it got pressed resets value to false
+    */
     bool gotPressed() {
-        return got_pressed;
+        if (got_pressed) {
+            got_pressed = false;
+            return true;
+        }
+        return false;
     }
+    /*
+    * Returns if key got released since last call. 
+    * If it got released resets value to false
+    */
     bool gotReleased() {
-        return got_released;
+        if(got_released) {
+            got_released = false;
+            return true;
+        }
+        return false;
     }
 };
-
-#ifdef WIN32
-class CGEKeyWindows : public CGEKey {
-    friend class CGEKeyRegistry;
-private:
-    SHORT last_state = 0;
-protected:
-    void update() override {
-        SHORT state = GetKeyState(virtual_key);
-            if (state < 0) {
-                is_down = true;
-                got_pressed = last_state >= 0;
-            } 
-            else {
-                is_down = false;
-                if(got_pressed) got_pressed = false;
-            }
-            last_state = state;
-    }
-
-    CGEKeyWindows(int virtual_key) :
-    CGEKey(virtual_key) { } 
-};  
-#endif
-
-#ifdef __linux__
-class CGEKeyLinux : public CGEKey {
-    friend class CGEKeyRegistry;
-protected:
-    CGEKeyLinux(int virtual_key) :
-    CGEKey(virtual_key) { }
-    void update() override {
-        //TODO
-    }
-};
-#endif
 
 class CGEKeyRegistry {
     friend class ConsoleGameEngine;
-private:
-    std::vector<CGEKey*> key_register;
+protected:
+    std::map<int, CGEKey*> key_register;
 
     CGEKeyRegistry() { }
-    ~CGEKeyRegistry() { }
-
-    void update() {
-        for (CGEKey* key : key_register) {
-            key->update();
+    ~CGEKeyRegistry() {
+        for(std::pair<int, CGEKey*> pair : key_register) {
+            delete pair.second;
         }
-    }
+     }
+
+    virtual void update() = 0;
     
 public:
     CGEKey* registerKey(int virtual_key) {
-        CGEKey* key = new _CGEKey(virtual_key);
-        key_register.push_back(key);
-        return key;
+        key_register[virtual_key] = new CGEKey();
+        return key_register[virtual_key];
+    };
+};
+
+#ifdef WINDOWS
+class CGEKeyRegistryWindows : public CGEKeyRegistry {
+    friend class ConsoleGameEngine;
+private:
+    void update() override {
+
+    }
+    CGEKeyRegistryWindows() :
+        CGEKeyRegistry() { }
+    ~CGEKeyRegistryWindows() { }
+};
+#endif
+
+#ifdef LINUX 
+class CGEKeyRegistryLinux : public CGEKeyRegistry {
+    friend class ConsoleGameEngine;
+private:
+    CGEKeyRegistryLinux() :
+        CGEKeyRegistry() { }
+    ~CGEKeyRegistryLinux() { }
+
+    void update() override {
+        int virtual_key;
+        XEvent event;
+        CGEKey* key;
+        while (XCheckMaskEvent(d, KeyPressMask | KeyReleaseMask | FocusChangeMask, &event)) {
+            virtual_key = XLookupKeysym(&event.xkey, 0);
+            switch (event.type) {
+                case KeyPress: {
+                    if (key_register.contains(virtual_key)) key_register[virtual_key]->update(true);
+                    break;
+                }
+                case KeyRelease: {
+                    if (key_register.contains(virtual_key)) key_register[virtual_key]->update(false);
+                    break;
+                }
+                case FocusIn: {
+                    if (autoreapeat) SetAutorepeat(false);
+                    break;
+                }
+                case FocusOut: {
+                    if (autoreapeat) SetAutorepeat(true);
+                    break;
+                }
+            }
+        }
     }
 };
+#endif
 
 class cgetostringstream : public cgeostringstream {
 public:
-    /*starts with 0;0*/
+    /* starts with 0;0 */
     void setCursor(int x, int y) {
         *this << CSI << y + 1 << VTS_SEPERATOR << x + 1 << VTS_SET_CURSOR_END;
     }
@@ -532,7 +636,7 @@ public:
 
 class ConsoleGameEngine {
 public:
-    CGEKeyRegistry key_registry;
+    CGEKeyRegistry* key_registry;
 private:
     std::wostringstream out;
     std::wostringstream render_out;
@@ -542,8 +646,12 @@ private:
     bool run = true;
 public:
     ConsoleGameEngine(void (*game_loop)(double)) :
-        game_loop(game_loop) { }
-
+        game_loop(game_loop), 
+        key_registry(new _CGEKeyRegistry()) { }
+    ~ConsoleGameEngine() {
+        if (map != nullptr) delete map;
+        delete key_registry;
+    }
     /*starts the program*/
     int start() {
         if (map == nullptr) return -3;
@@ -560,16 +668,87 @@ public:
         return 0;
     }
 
-    /*stops the program, call in game_loop*/
+    /* stops the program, call in game_loop */
     void stop() {
         run = false;
     }
 
-    ~ConsoleGameEngine() {
-        delete map;
+    void setFontSize(int width, int height) {
+#ifdef WINDOWS
+        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+
+        PCONSOLE_FONT_INFOEX lpConsoleCurrentFontEx = new CONSOLE_FONT_INFOEX();
+        lpConsoleCurrentFontEx->cbSize = sizeof(CONSOLE_FONT_INFOEX);
+        GetCurrentConsoleFontEx(out, 0, lpConsoleCurrentFontEx);
+        lpConsoleCurrentFontEx->dwFontSize.X = width;
+        lpConsoleCurrentFontEx->dwFontSize.Y = height;
+        SetCurrentConsoleFontEx(out, 0, lpConsoleCurrentFontEx);
+#endif
+#ifdef LINUX 
+        //TODO
+#endif
     }
 
-#ifdef WIN32
+    void hideCurser() {
+        cgecout << VTS_HIDE_CURSER;
+    }
+
+    void showCurser() {
+        cgecout << VTS_SHOW_CURSER;
+    }
+
+    void enableCursorBlinking() {
+        cgecout << VTS_ENABLE_CURSER_BLINKING;
+    }
+
+    void disableCursorBlinking() {
+        cgecout << VTS_DISABLE_CURSER_BLINKING;
+    }
+
+    void useAlternativeScreenBuffer() {
+        cgecout << CSI VTS_USE_ALTERNATE_SCREEN_BUFFER;
+    }
+
+    void useMainScreenBuffer() {
+        cgecout << CSI VTS_USE_MAIN_SCREEN_BUFFER;
+    }
+
+    /* sets cusor to position <x>:<y> beginning with 0:0 */
+    void setCurser(int x, int y) {
+        cgecout << CSI << y + 1 << VTS_SEPERATOR << x + 1 << VTS_SET_CURSOR_END;
+    }
+
+    void deleteChar(int n) {
+        cgecout << CSI << n << VTS_DELETE_CHAR_END;
+    }
+
+    void changeTextFormat(const cgechar* format) {
+        cgecout << CSI << format << VTS_CHANGE_TEXT_FORMAT_END;
+    }
+
+
+    CGECharMap* init_CharMap(int width, int height) {
+        preinit();
+
+        if (map != nullptr) {
+            delete map;
+        }
+        map = new CGECharMap(width, height);
+        return (CGECharMap*)map;
+    }
+
+    /* pixel_width and pixel_height in amount of characters in console */
+    CGEPixelMap* init_PixelMap(int width, int height, int pixel_width, int pixel_height) {
+        preinit();
+
+        if (map != nullptr) {
+            delete map;
+        }
+        map = new CGEPixelMap(width, height, pixel_width, pixel_height);
+        return (CGEPixelMap*)map;
+    }
+
+#ifdef WINDOWS
     bool enableTVMode() {
         HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
         if (hOut == INVALID_HANDLE_VALUE) {
@@ -589,87 +768,26 @@ public:
     }
 #endif
 
-    void setFontSize(int width, int height) {
-#ifdef WIN32
-        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
-
-        PCONSOLE_FONT_INFOEX lpConsoleCurrentFontEx = new CONSOLE_FONT_INFOEX();
-        lpConsoleCurrentFontEx->cbSize = sizeof(CONSOLE_FONT_INFOEX);
-        GetCurrentConsoleFontEx(out, 0, lpConsoleCurrentFontEx);
-        lpConsoleCurrentFontEx->dwFontSize.X = width;
-        lpConsoleCurrentFontEx->dwFontSize.Y = height;
-        SetCurrentConsoleFontEx(out, 0, lpConsoleCurrentFontEx);
-#elif __linux__
-        //TODO
+#ifdef LINUX
+    
 #endif
-    }
-
-    void hideCurser() {
-        std::wcout << VTS_HIDE_CURSER;
-    }
-
-    void showCurser() {
-        std::wcout << VTS_SHOW_CURSER;
-    }
-
-    void enableCursorBlinking() {
-        std::wcout << VTS_ENABLE_CURSER_BLINKING;
-    }
-
-    void disableCursorBlinking() {
-        std::wcout << VTS_DISABLE_CURSER_BLINKING;
-    }
-
-    void useAlternativeScreenBuffer() {
-        std::wcout << CSI VTS_USE_ALTERNATE_SCREEN_BUFFER;
-    }
-
-    void useMainScreenBuffer() {
-        std::wcout << CSI VTS_USE_MAIN_SCREEN_BUFFER;
-    }
-
-    void setCurser(int x, int y) {
-        std::wcout << CSI << y << VTS_SEPERATOR << x << VTS_SET_CURSOR_END;
-    }
-
-    void deleteChar(int n) {
-        std::wcout << CSI << n << VTS_DELETE_CHAR_END;
-    }
-
-    void changeTextFormat(const cgechar* format) {
-        std::wcout << CSI << format << VTS_CHANGE_TEXT_FORMAT_END;
-    }
-
-
-    CGECharMap* init_CharMap(int width, int height) {
-        preinit();
-
-        if (map != nullptr) {
-            delete map;
-        }
-
-        map = new CGECharMap(width, height);
-
-        return (CGECharMap*)map;
-    }
-
-    /*pixel_width and pixel_height in amount of characters in console*/
-    CGEPixelMap* init_PixelMap(int width, int height, int pixel_width, int pixel_height) {
-        preinit();
-
-        if (map != nullptr) {
-            delete map;
-        }
-
-        map = new CGEPixelMap(width, height, pixel_width, pixel_height);
-
-        return (CGEPixelMap*)map;
-    }
 
 private:
     void preinit() {
-#ifdef WIN32
+#ifdef WINDOWS
         enableTVMode();
+#endif
+#ifdef LINUX
+        SelectXInput();
+
+        if (IsAutorepeatEnabled()) {
+            autoreapeat = true;
+            //TODO check
+            SetAutorepeat(false);
+        }
+
+        /* prevent user input in terminal */
+        system("stty -echo");
 #endif
         useAlternativeScreenBuffer();
         hideCurser();
@@ -703,7 +821,7 @@ private:
             std::unique_lock<std::mutex> lock(buffer_flag ? mutex_mech_1 : mutex_mech_2);
             while (!(buffer_flag ? continue_mech_1 : continue_mech_2)) (buffer_flag ? cv_mech_1 : cv_mech_2).wait(lock);
 
-            key_registry.update();
+            key_registry->update();
             auto end = std::chrono::steady_clock::now();
             std::chrono::duration<double> elapsed_time = end - start;
             game_loop(elapsed_time.count());

@@ -8,10 +8,10 @@
 ConsoleGameEngine cge(game_loop);
  
 //register keys and hold pointer to check changes
-CGEKey* key_w = cge.key_registry.registerKey('W');
-CGEKey* key_a = cge.key_registry.registerKey('A');
-CGEKey* key_s = cge.key_registry.registerKey('S');
-CGEKey* key_d = cge.key_registry.registerKey('D');
+CGEKey* key_w = cge.key_registry->registerKey('w');
+CGEKey* key_a = cge.key_registry->registerKey('a');
+CGEKey* key_s = cge.key_registry->registerKey('s');
+CGEKey* key_d = cge.key_registry->registerKey('d');
 
 bool moved = false;
 
