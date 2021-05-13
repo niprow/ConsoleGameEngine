@@ -8,10 +8,10 @@
 ConsoleGameEngine cge(game_loop);
  
 //register keys and hold pointer to check changes
-CGEKey* key_w = cge.key_registry->registerKey('w');
-CGEKey* key_a = cge.key_registry->registerKey('a');
-CGEKey* key_s = cge.key_registry->registerKey('s');
-CGEKey* key_d = cge.key_registry->registerKey('d');
+CGEKey* key_w = cge.key_registry->registerKey(CGE_KEY_W);
+CGEKey* key_a = cge.key_registry->registerKey(CGE_KEY_A);
+CGEKey* key_s = cge.key_registry->registerKey(CGE_KEY_S);
+CGEKey* key_d = cge.key_registry->registerKey(CGE_KEY_D);
 
 bool moved = false;
 
@@ -20,7 +20,7 @@ int y = 5;
 int x_old = 5;
 int y_old = 5;
 
-#ifdef SAMPLE_ONE
+#ifdef SAMPLE_ONE //CharMap
 
 CGECharMap* map;
 char player = L'#';
@@ -69,7 +69,7 @@ void game_loop(double time_passed) {
 }
 #endif
 
-#ifdef SAMPLE_TWO
+#ifdef SAMPLE_TWO //PixelMap
 
 CGEPixelMap* map;
 

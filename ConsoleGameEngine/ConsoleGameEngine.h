@@ -85,6 +85,35 @@ void DoDebug(bool b) {
 #define VTS_DELETE_CHAR_END L'P'
 #define VTS_CHANGE_TEXT_FORMAT_END L'm'
 #define VTS_CHANGE_BACKGROUND_COLOR CSI L"48;2;"
+
+/* Keyboard Virtual Keys: */
+#define CGE_KEY_A 'A'
+#define CGE_KEY_B 'B'
+#define CGE_KEY_C 'C'
+#define CGE_KEY_D 'D'
+#define CGE_KEY_E 'E'
+#define CGE_KEY_F 'F'
+#define CGE_KEY_G 'G'
+#define CGE_KEY_H 'H'
+#define CGE_KEY_I 'I'
+#define CGE_KEY_J 'J'
+#define CGE_KEY_K 'K'
+#define CGE_KEY_L 'L'
+#define CGE_KEY_M 'M'
+#define CGE_KEY_N 'N'
+#define CGE_KEY_O 'O'
+#define CGE_KEY_P 'P'
+#define CGE_KEY_Q 'Q'
+#define CGE_KEY_R 'R'
+#define CGE_KEY_S 'S'
+#define CGE_KEY_T 'T'
+#define CGE_KEY_U 'U'
+#define CGE_KEY_V 'V'
+#define CGE_KEY_W 'W'
+#define CGE_KEY_X 'X'
+#define CGE_KEY_Y 'Y'
+#define CGE_KEY_Z 'Z'
+//TODO
 #endif
 
 #ifdef LINUX
@@ -115,6 +144,35 @@ void DoDebug(bool b) {
 #define VTS_DELETE_CHAR_END 'P'
 #define VTS_CHANGE_TEXT_FORMAT_END 'm'
 #define VTS_CHANGE_BACKGROUND_COLOR CSI "48;2;"
+
+/* Keyboard Virtual Keys: */
+#define CGE_KEY_A 'a'
+#define CGE_KEY_B 'b'
+#define CGE_KEY_C 'c'
+#define CGE_KEY_D 'd'
+#define CGE_KEY_E 'r'
+#define CGE_KEY_F 'f'
+#define CGE_KEY_G 'g'
+#define CGE_KEY_H 'h'
+#define CGE_KEY_I 'i'
+#define CGE_KEY_J 'j'
+#define CGE_KEY_K 'k'
+#define CGE_KEY_L 'l'
+#define CGE_KEY_M 'm'
+#define CGE_KEY_N 'n'
+#define CGE_KEY_O 'o'
+#define CGE_KEY_P 'p'
+#define CGE_KEY_Q 'q'
+#define CGE_KEY_R 'r'
+#define CGE_KEY_S 's'
+#define CGE_KEY_T 't'
+#define CGE_KEY_U 'u'
+#define CGE_KEY_V 'v'
+#define CGE_KEY_W 'w'
+#define CGE_KEY_X 'x'
+#define CGE_KEY_Y 'y'
+#define CGE_KEY_Z 'z'
+//TODO
 
 /* x11 Display to get input from console window */
 Display* d;
@@ -265,7 +323,21 @@ class CGEKeyRegistryWindows : public CGEKeyRegistry {
     friend class ConsoleGameEngine;
 private:
     void update() override {
-
+        for (std::pair<int, CGEKey*> kv : key_register) {
+            SHORT state = GetKeyState(kv.first);
+            if (state < 0) {
+                if (!kv.second->is_down) {
+                    kv.second->is_down = true;
+                    kv.second->got_pressed = true;
+                }
+            }
+            else {
+                if (kv.second->is_down) {
+                    kv.second->is_down = false;
+                    kv.second->got_released = true;
+                }
+            }
+        }
     }
     CGEKeyRegistryWindows() :
         CGEKeyRegistry() { }
@@ -646,7 +718,7 @@ private:
     bool run = true;
 public:
     ConsoleGameEngine(void (*game_loop)(double)) :
-        game_loop(game_loop), 
+        game_loop(game_loop),
         key_registry(new _CGEKeyRegistry()) { }
     ~ConsoleGameEngine() {
         if (map != nullptr) delete map;
@@ -769,7 +841,7 @@ public:
 #endif
 
 #ifdef LINUX
-    
+
 #endif
 
 private:
@@ -826,8 +898,8 @@ private:
             std::chrono::duration<double> elapsed_time = end - start;
             game_loop(elapsed_time.count());
             start = std::chrono::steady_clock::now();
-            
-            
+
+
 
             if (buffer_flag) {
                 map->switchBuffer();
