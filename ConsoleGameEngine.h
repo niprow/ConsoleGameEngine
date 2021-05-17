@@ -24,6 +24,7 @@
 #include <fstream>
 
 bool Debug_Out = false;
+    std::cout << "test"; //TODO delete
 
 void DebugOut(const std::string out) {
     std::ofstream file_out;
@@ -44,6 +45,7 @@ void DoDebug(bool b) {
 
 #ifdef __WIN32
 #ifndef WINDOWS
+
 #define WINDOWS
 #endif
 #endif
@@ -179,11 +181,6 @@ void DoDebug(bool b) {
 #define CGE_KEY_Y 'y'
 #define CGE_KEY_Z 'z'
 //TODO
-
-/* x11 Display to get input from console window */
-Display* d;
-/* x11 Autorepeat: true if usually enabled */
-bool autoreapeat = false;
 #endif
 
 #include <stdio.h>
@@ -196,6 +193,7 @@ bool autoreapeat = false;
 #include <chrono>
 #include <vector>
 #include <map>
+#include <signal.h>
 
 /* text formats */
 #define TF_COLOR_FOREGROUND_BLACK      30
@@ -224,18 +222,36 @@ using namespace std::chrono_literals;
 /* Runs cmd command and returns output */
 cgestring PromptCommand(std::string cmd);
 
-#ifdef LINUX
-/*
-* get ID from terminal window and enable XEvents for KeyPress, KeyRelease and FocusChange
-* to be able to update CGEKeyRegistry
+/* 
+* Registers handlers for signals if game process gets interrupted. 
+* Per example the console gets closed. 
+* ConsoleGameEngine::stop will be called.
 */
-bool SelectXInput();
+void RegisterSignalHandlers(); //Debugger console might not support and behaive unexpected.
+
+/* Signal Handler. Calls ConsoleGameEngine::stop. */
+void signal_handler(int sig);
+
+#ifdef LINUX
+//x11 Display to get input from console window
+Display* x11_display;
+
+/*
+* Initializes x11 display and events for CGEKeyRegistry::update
+* 
+* Checked on:
+* - Kubuntu 21.04 | KDE Plasma Version 5.21.4 
+*/
+bool X11Init();
 
 /* checks if Autorepeat is usually enabled to reenable it if necessary */
 bool IsAutorepeatEnabled();
 
 /* Sets x11 autorepeat */
 void SetAutorepeat(bool ar);
+
+/* Enable or disable console input in Linux */
+void SetConsoleInput(bool ci);
 #endif
 
 #ifdef WINDOWS
@@ -482,8 +498,8 @@ public:
 
 enum CGEState {
     //TODO full handling
-    CGE_UNINITIALIZED, //need to call ConsoleGameEngine::init
-    CGE_INITIALIZING, //need to call ConsoleGameEngine::setMap
+    CGE_UNINITIALIZED, //need to call ConsoleGameEngine::init to initialize 
+    CGE_INITIALIZING, //need to call ConsoleGameEngine::setMap to finish init
     CGE_INITIALIZED, //ready to start, call ConsoleGameEngine::start
     CGE_RUNNING, //running in mechanics and graphics thread
     CGE_STOPPING, //stopping without specific issue
@@ -493,6 +509,13 @@ enum CGEState {
 
 class ConsoleGameEngine {
 private:
+    /* Contains standard settings from Dist and Terminal */
+    struct DefaultSettings { 
+        bool autorepeat = true; //used only for Linux
+        int text_size_width = 0; //TODO
+        int text_size_height = 0; //TODO
+    } default_settings;
+
     int state = CGE_UNINITIALIZED;
     CGEKeyRegistry* key_registry = nullptr;
     CGEGraphics* graphics = nullptr;
@@ -514,6 +537,9 @@ public:
 
     /* Returns reference to key_registry for registering keys */
     CGEKeyRegistry& getKeyRegistry();
+
+    /* Returns reference to standard_settings */
+    DefaultSettings& getStandardSettings();
 
     /* Asks user to continue game and sets state of ConsoleGameEngine depending on anser */
     void error(std::string error_out);
@@ -619,7 +645,15 @@ inline cgestring PromptCommand(std::string cmd) {
     return result.str();
 }
 
+inline void signal_handler(int sig) {
+    ConsoleGameEngine::GetInstance().stop();
+}
+
 #ifdef WINDOWS
+inline void RegisterSignalHandlers() {
+    //TODO
+}
+
 inline bool EnableTVMode() {
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     if (hOut == INVALID_HANDLE_VALUE) {
@@ -638,21 +672,43 @@ inline bool EnableTVMode() {
     return true;
 }
 #endif
-
 #ifdef LINUX
-inline bool SelectXInput() {
-    //TODO
-    d = XOpenDisplay(NULL);
-    system("env | grep \"WINDOW *ID *=\"");
-    Window w;
-    std::cin >> w;
-    XSelectInput(d, w, KeyPressMask | KeyReleaseMask | FocusChangeMask);
+inline void RegisterSignalHandlers() {
+    //registers signal_handler as handler and overrides standard
+    signal(SIGHUP, signal_handler);
+    signal(SIGINT, signal_handler);
+    signal(SIGQUIT, signal_handler);
+}
+
+inline bool X11Init() {
+    x11_display = XOpenDisplay(NULL);
+    if (x11_display == nullptr) {
+        return false;
+    }
+    //TODO better solution:
+    std::string inp = PromptCommand("env | grep \"WINDOW *ID *=\"");
+    std::string x_id = inp.substr(inp.find("=") + 1);
+    Window w = std::stoi(x_id);
+    XSelectInput(x11_display, w, KeyPressMask | KeyReleaseMask | FocusChangeMask);
+
     return true;
 }
 
 inline bool IsAutorepeatEnabled() {
-    //TODO
-    system("xset q | \"auto *repeat: *on\"");
+    //TODO better solution
+    std::string inp = PromptCommand("xset q | grep \"auto *repeat:\"");
+    std::string x = inp.substr(inp.find(":") + 1);
+
+    for (int i = 0; i < 10; i++) {
+        if (x[i] == 'n') {
+            return true;
+        }
+        if (x[i] == 'f') {
+            return false;
+        }
+    }
+
+    ConsoleGameEngine::GetInstance().error("Could not figure out if auto-repeat is enabled or not\nIf Autorepeat is not wanted run \"xset r off\" in the console to disable it.");
     return true;
 }
 
@@ -662,6 +718,15 @@ inline void SetAutorepeat(bool ar) {
     }
     else {
         system("xset r off");
+    }
+}
+
+inline void SetConsoleInput(bool ci) {
+    if (ci) {
+        system("stty echo");
+    }
+    else {
+        system("stty -echo");
     }
 }
 #endif
@@ -723,25 +788,25 @@ inline void CGEKeyRegistry::update() {
     int virtual_key;
     XEvent event;
     CGEKey* key;
-    while (XCheckMaskEvent(d, KeyPressMask | KeyReleaseMask | FocusChangeMask, &event)) {
+    while (XCheckMaskEvent(x11_display, KeyPressMask | KeyReleaseMask | FocusChangeMask, &event)) {
         virtual_key = XLookupKeysym(&event.xkey, 0);
         switch (event.type) {
-        case KeyPress: {
-            if (key_register.contains(virtual_key)) key_register[virtual_key]->update(true);
-            break;
-        }
-        case KeyRelease: {
-            if (key_register.contains(virtual_key)) key_register[virtual_key]->update(false);
-            break;
-        }
-        case FocusIn: {
-            if (autoreapeat) SetAutorepeat(false);
-            break;
-        }
-        case FocusOut: {
-            if (autoreapeat) SetAutorepeat(true);
-            break;
-        }
+            case KeyPress: {
+                if (key_register.contains(virtual_key)) key_register[virtual_key]->update(true);
+                break;
+            }
+            case KeyRelease: {
+                if (key_register.contains(virtual_key)) key_register[virtual_key]->update(false);
+                break;
+            }
+            case FocusIn: {
+                if (ConsoleGameEngine::GetInstance().getStandardSettings().autorepeat) SetAutorepeat(false);
+                break;
+            }
+            case FocusOut: {
+                if (ConsoleGameEngine::GetInstance().getStandardSettings().autorepeat) SetAutorepeat(true);
+                break;
+            }
         }
     }
 }
@@ -973,12 +1038,20 @@ inline CGEKeyRegistry& ConsoleGameEngine::getKeyRegistry() {
     return *key_registry;
 }
 
+inline ConsoleGameEngine::DefaultSettings& ConsoleGameEngine::getStandardSettings() {
+    return default_settings;
+}
+
 inline void ConsoleGameEngine::error(std::string error_out) {
     //TODO switch to mainInputBuffer and back...
     cgecout << "Error occured: \n";
     cgecout << error_out.c_str() << '\n';
     cgecout << "Do you want to continue the program?\n";
     cgecout << "Enter: (y: continue) (n: stop as soon as possible)\n";
+
+#ifdef LINUX
+    SetConsoleInput(true);
+#endif
     while (true) {
         cgestring input;
         cgecin >> input;
@@ -991,6 +1064,9 @@ inline void ConsoleGameEngine::error(std::string error_out) {
             break;
         }
     }
+#ifdef LINUX
+    SetConsoleInput(false);
+#endif
 }
 
 inline int ConsoleGameEngine::start() {
@@ -999,6 +1075,10 @@ inline int ConsoleGameEngine::start() {
 
         useAlternativeScreenBuffer();
         hideCursor();
+#ifdef LINUX
+        SetAutorepeat(false);
+        SetConsoleInput(false);
+#endif
 
         std::thread thread_mechanics(&ConsoleGameEngine::thread_mechanics, this);
         std::thread thread_graphics(&ConsoleGameEngine::thread_graphics, this);
@@ -1006,8 +1086,12 @@ inline int ConsoleGameEngine::start() {
         thread_mechanics.join();
         thread_graphics.join();
 
-        useMainScreenBuffer();
+#ifdef LINUX
+        if (default_settings.autorepeat) SetAutorepeat(true);
+        SetConsoleInput(true);
+#endif
         //TODO set back to defaults
+        useMainScreenBuffer();
         showCurosr();
     }
     else {
@@ -1021,6 +1105,7 @@ inline int ConsoleGameEngine::start() {
 inline void ConsoleGameEngine::stop() {
     state = CGE_STOPPING;
 }
+
 #ifdef WINDOWS
 inline void ConsoleGameEngine::setFontSize(int width, int height) {
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -1069,19 +1154,22 @@ inline void ConsoleGameEngine::init(void (*game_loop) (double)) {
     }
     this->game_loop = game_loop;
 
-    //TODO get default font etc. from terminal and save to restore
+    RegisterSignalHandlers();
+    //TODO get default font etc. from terminal and save int DefaultSettings to restore
 #ifdef WINDOWS
     EnableTVMode(); //TODO error handling
 #endif
 #ifdef LINUX
-    SelectXInput(); //TODO error handling
+    if (!X11Init()) {
+        error("Error occured on X11Init. Any input may behaive unexpected.");
+    } 
 
     //TODO:
-    if (IsAutrepeatEnabled()) {
-        autorepeat = true; 
+    if (IsAutorepeatEnabled()) {
+        default_settings.autorepeat = true; 
     }
     else {
-        autorepeat = false;
+        default_settings.autorepeat = false;
     }
 #endif
 
@@ -1107,15 +1195,17 @@ inline void ConsoleGameEngine::setState(int state) {
                 this->state |= CGE_ERROR;
             }
             else {
-                this->state = state;
+                if (this->state != CGE_STOPPING) this->state = state;
             }
         }
         else {
-            if (state < CGE_ERROR) {
-                this->state = (CGE_ERROR | state);
-            }
-            else {
-                this->state = state;
+            if (this->state != (CGE_STOPPING | CGE_ERROR)) {
+                if (state < CGE_ERROR) {
+                    this->state = (CGE_ERROR | state);
+                }
+                else {
+                    this->state = state;
+                }
             }
         }
     }
