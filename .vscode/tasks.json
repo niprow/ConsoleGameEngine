@@ -1,0 +1,30 @@
+{
+    "tasks": [
+        {
+            "type": "cppbuild",
+            "label": "Linux Build",
+            "command": "/usr/bin/g++-10",
+            "args": [
+                "-g",
+                "-std=c++2a",
+                "${workspaceFolder}/Sample.cpp",
+                "-o",
+                "${workspaceFolder}/Sample", 
+                "-pthread", 
+                "-L/usr/lib/x86_64-linux-gnu/", 
+                "-lX11"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ],
+    "version": "2.0.0"
+}
